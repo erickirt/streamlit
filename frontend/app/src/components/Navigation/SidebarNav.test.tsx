@@ -19,13 +19,12 @@ import React from "react"
 import { screen } from "@testing-library/react"
 import { userEvent } from "@testing-library/user-event"
 
-import { AppContextProps } from "@streamlit/app/src/components/AppContext"
-import * as StreamlitContextProviderModule from "@streamlit/app/src/components/StreamlitContextProvider"
 import * as LibModule from "@streamlit/lib"
 import {
   mockEndpoints,
   NavigationContextProps,
   renderWithContexts,
+  SidebarConfigContextProps,
 } from "@streamlit/lib"
 import { IAppPage, PageConfig } from "@streamlit/protobuf"
 
@@ -148,18 +147,15 @@ const getProps = (props: Partial<Props> = {}): Props => ({
   ...props,
 })
 
-function getAppContextOutput(
-  context: Partial<AppContextProps>
-): AppContextProps {
+function getSidebarConfigContextOutput(
+  context: Partial<SidebarConfigContextProps>
+): SidebarConfigContextProps {
   return {
     initialSidebarState: PageConfig.SidebarState.AUTO,
     appLogo: null,
     sidebarChevronDownshift: 0,
     expandSidebarNav: false,
     hideSidebarNav: false,
-    widgetsDisabled: false,
-    gitInfo: null,
-    showToolbar: true,
     ...context,
   }
 }
@@ -177,36 +173,26 @@ function getNavigationContextOutput(
   }
 }
 
-// Helper to setup context mocks for tests
-function setupContextMocks(options?: {
-  appContext?: Partial<AppContextProps>
-  navigationContext?: Partial<NavigationContextProps>
-}): void {
-  vi.spyOn(StreamlitContextProviderModule, "useAppContext").mockReturnValue(
-    getAppContextOutput(options?.appContext || {})
-  )
-}
-
 // Helper to render SidebarNav with proper context
 function renderSidebarNav(
   props: Partial<Props> = {},
   overrides?: {
-    appContext?: Partial<AppContextProps>
+    sidebarConfigContext?: Partial<SidebarConfigContextProps>
     navigationContext?: Partial<NavigationContextProps>
   }
 ): ReturnType<typeof renderWithContexts> {
-  // Setup AppContext mock with overrides if provided
-  if (overrides?.appContext) {
-    setupContextMocks({ appContext: overrides.appContext })
-  }
+  const sidebarConfigContextValues = getSidebarConfigContextOutput(
+    overrides?.sidebarConfigContext || {}
+  )
 
-  const fullProps = getProps(props)
   const navigationContextValues = getNavigationContextOutput(
     overrides?.navigationContext || {}
   )
+
   return renderWithContexts(
-    <SidebarNav {...fullProps} />,
+    <SidebarNav {...getProps(props)} />,
     {}, // libContextProps
+    sidebarConfigContextValues, // sidebarConfigContextProps
     {}, // themeContextProps
     navigationContextValues, // navigationContextProps
     {}, // formsContextProps
@@ -216,7 +202,6 @@ function renderSidebarNav(
 
 describe("SidebarNav", () => {
   beforeEach(() => {
-    setupContextMocks()
     vi.spyOn(LibModule, "isMobile").mockReturnValue(false)
   })
 
@@ -304,7 +289,7 @@ describe("SidebarNav", () => {
     renderSidebarNav(
       { hasSidebarElements: true },
       {
-        appContext: { expandSidebarNav: true },
+        sidebarConfigContext: { expandSidebarNav: true },
         navigationContext: { appPages: generateAppPages(13) },
       }
     )
