@@ -78,6 +78,7 @@ import {
   getHostSpecifiedTheme,
   getIFrameEnclosingApp,
   getLocaleLanguage,
+  getQueryString,
   getScreencastTimestamp,
   getTimezone,
   getTimezoneOffset,
@@ -1320,7 +1321,7 @@ export class App extends PureComponent<Props, State> {
     // navigating via browser history (back/forward buttons). This ensures that
     // query params present in the URL after history navigation are sent to the
     // server on the first script run.
-    this.onPageChange(targetAppPage.pageScriptHash as string, true)
+    this.onPageChange(targetAppPage.pageScriptHash as string, undefined, true)
   }
 
   /**
@@ -1676,6 +1677,7 @@ export class App extends PureComponent<Props, State> {
 
   onPageChange = (
     pageScriptHash: string,
+    queryString?: string,
     preserveQueryParams?: boolean
   ): void => {
     const { elements, mainScriptHash } = this.state
@@ -1703,6 +1705,7 @@ export class App extends PureComponent<Props, State> {
       undefined,
       pageScriptHash,
       undefined,
+      queryString,
       preserveQueryParams
     )
   }
@@ -1721,6 +1724,7 @@ export class App extends PureComponent<Props, State> {
     fragmentId?: string,
     pageScriptHash?: string,
     isAutoRerun?: boolean,
+    queryStringOverride?: string,
     preserveQueryParams?: boolean
   ): void => {
     const baseUriParts = this.getBaseUriParts()
@@ -1734,7 +1738,7 @@ export class App extends PureComponent<Props, State> {
     }
 
     const { currentPageScriptHash } = this.state
-    let queryString = this.getQueryString()
+    let queryString = queryStringOverride ?? this.getQueryString()
     let pageName = ""
 
     const contextInfo = {
@@ -1755,11 +1759,13 @@ export class App extends PureComponent<Props, State> {
         // Skip clearing if preserveQueryParams is true (e.g., browser back/forward
         // navigation where query params from the URL should be preserved).
         const preservedQueryParams = preserveEmbedQueryParams()
-        queryString = preservedQueryParams
-        this.setState({ queryParams: preservedQueryParams })
+
+        queryString = getQueryString(queryStringOverride, preservedQueryParams)
+
+        this.setState({ queryParams: queryString })
         this.hostCommunicationMgr.sendMessageToHost({
           type: "SET_QUERY_PARAM",
-          queryParams: preservedQueryParams,
+          queryParams: queryString,
         })
       }
     } else if (currentPageScriptHash) {
