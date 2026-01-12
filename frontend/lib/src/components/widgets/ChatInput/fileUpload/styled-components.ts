@@ -147,40 +147,45 @@ export const StyledChatUploadedFileSize = styled.div(({ theme }) => ({
   fontSize: theme.fontSizes.sm,
 }))
 
-export const StyledChatUploadedFileDeleteButton = styled.small(
-  ({ theme }) => ({
-    position: "absolute",
-    top: theme.spacing.twoXS,
-    right: theme.spacing.twoXS,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    lineHeight: 0,
-    // Circular background for the X button
-    "& button": {
+export interface StyledChatUploadedFileDeleteButtonProps {
+  isError?: boolean
+}
+
+export const StyledChatUploadedFileDeleteButton =
+  styled.small<StyledChatUploadedFileDeleteButtonProps>(
+    ({ theme, isError }) => ({
+      position: "absolute",
+      top: theme.spacing.twoXS,
+      right: theme.spacing.twoXS,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      width: "fit-content",
-      height: "fit-content",
-      minHeight: "unset",
-      minWidth: "unset",
-      maxHeight: "unset",
-      maxWidth: "unset",
-      borderRadius: "50%",
-      backgroundColor: "transparent",
-      color: theme.colors.fadedText20,
-      padding: 0,
-      overflow: "hidden",
-      boxSizing: "border-box",
       lineHeight: 0,
-      "&:hover": {
+      // Circular background for the X button
+      "& button": {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "fit-content",
+        height: "fit-content",
+        minHeight: "unset",
+        minWidth: "unset",
+        maxHeight: "unset",
+        maxWidth: "unset",
+        borderRadius: "50%",
         backgroundColor: "transparent",
-        color: theme.colors.fadedText40,
+        color: isError ? theme.colors.redTextColor : theme.colors.fadedText60,
+        padding: 0,
+        overflow: "hidden",
+        boxSizing: "border-box",
+        lineHeight: 0,
+        "&:hover": {
+          backgroundColor: "transparent",
+          color: isError ? theme.colors.redColor : theme.colors.bodyText,
+        },
       },
-    },
-  })
-)
+    })
+  )
 
 /* eslint-disable streamlit-custom/no-hardcoded-theme-values */
 // Visually hidden but accessible to screen readers
