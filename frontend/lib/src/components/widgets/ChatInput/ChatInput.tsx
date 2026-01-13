@@ -186,7 +186,9 @@ function ChatInput({
   const [audioUploading, setAudioUploading] = useState(false)
   const [recordingError, setRecordingError] = useState<string | null>(null)
 
-  // Read acceptAudio from the element configuration
+  // Forces dropzone to remount when files are cleared
+  const [dropzoneResetCounter, setDropzoneResetCounter] = useState(0)
+
   const acceptAudio = element.acceptAudio ?? false
 
   // Cleanup: abort any in-progress uploads on unmount
@@ -258,10 +260,16 @@ function ChatInput({
           return prevFiles
         }
 
-        // Handle abort/deletion using shared helper
         deleteUploadedFile(file)
 
-        return prevFiles.filter(fileArg => fileArg.id !== fileId)
+        const newFiles = prevFiles.filter(fileArg => fileArg.id !== fileId)
+
+        // Reset dropzone when all files are cleared
+        if (newFiles.length === 0) {
+          setDropzoneResetCounter(c => c + 1)
+        }
+
+        return newFiles
       })
     },
     [deleteUploadedFile]
@@ -273,22 +281,19 @@ function ChatInput({
     ((acceptedFiles: File[], rejectedFiles: never[]) => void) | null
   >(null)
 
-  const handleRetry = useCallback(
-    (fileInfo: UploadFileInfo): void => {
-      if (!fileInfo.file || fileInfo.status.type !== "error") {
-        return
-      }
+  const handleRetry = useCallback((fileInfo: UploadFileInfo): void => {
+    if (!fileInfo.file || fileInfo.status.type !== "error") {
+      return
+    }
 
-      // Remove the failed file from state
-      setFiles(prevFiles => prevFiles.filter(f => f.id !== fileInfo.id))
+    // Remove the failed file from state
+    setFiles(prevFiles => prevFiles.filter(f => f.id !== fileInfo.id))
 
-      // Re-trigger the upload using the drop handler
-      if (dropHandlerRef.current) {
-        dropHandlerRef.current([fileInfo.file], [])
-      }
-    },
-    [] // No dependencies - uses ref for dropHandler
-  )
+    // Re-trigger the upload using the drop handler
+    if (dropHandlerRef.current) {
+      dropHandlerRef.current([fileInfo.file], [])
+    }
+  }, [])
 
   const createChatInputWidgetFilesValue =
     useCallback((): FileUploaderStateProto => {
@@ -394,6 +399,9 @@ function ChatInput({
       acceptFile === AcceptFileValue.Directory,
     accept: getAccept(element.fileType),
     maxSize: maxFileSize,
+    // Disable the File System Access API to avoid browser-specific issues
+    // with drag-and-drop uploads (see issue #6176 and FileDropzone usage).
+    useFsAccessApi: false,
   })
 
   const submitChatInput = useCallback(
@@ -427,6 +435,12 @@ function ChatInput({
         { fromUi: true },
         fragmentId
       )
+
+      // Reset dropzone when files are cleared on submit
+      if (files.length > 0) {
+        setDropzoneResetCounter(c => c + 1)
+      }
+
       setFiles([])
       setValue("")
       autoExpand.clearScrollHeight()
@@ -435,6 +449,7 @@ function ChatInput({
       dirty,
       disabled,
       value,
+      files.length,
       createChatInputWidgetFilesValue,
       widgetMgr,
       element,
@@ -784,8 +799,14 @@ function ChatInput({
               <StyledLeftCluster>
                 {acceptFile !== AcceptFileValue.None && !isRecording && (
                   <ChatFileUploadButton
-                    getRootProps={getRootProps}
-                    getInputProps={getInputProps}
+                    key={dropzoneResetCounter}
+                    onDrop={dropHandler}
+                    multiple={
+                      acceptFile === AcceptFileValue.Multiple ||
+                      acceptFile === AcceptFileValue.Directory
+                    }
+                    accept={getAccept(element.fileType)}
+                    maxSize={maxFileSize}
                     acceptFile={acceptFile}
                     disabled={disabled}
                   />
