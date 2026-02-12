@@ -80,6 +80,39 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Run tests with the experimental Starlette server instead of Tornado",
     )
+    parser.addoption(
+        "--external-app-url",
+        action="store",
+        default=None,
+        help="Run tests against an externally hosted app URL instead of localhost",
+    )
+    parser.addoption(
+        "--external-host-url",
+        action="store",
+        default=None,
+        help=(
+            "Optional host page URL for externally hosted apps. "
+            "If provided, tests can load the host page (e.g. Snowsight) and target the app iframe."
+        ),
+    )
+    parser.addoption(
+        "--external-iframe-selector",
+        action="store",
+        default=None,
+        help=(
+            "CSS selector for the iframe element that contains the app when using --external-host-url. "
+            "Defaults to 'iframe'."
+        ),
+    )
+    parser.addoption(
+        "--browser-state-path",
+        action="store",
+        default=None,
+        help=(
+            "Path to a Playwright storage state JSON file "
+            "(for example, to preload an authenticated browser session)."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -89,6 +122,10 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers", "app_hash(hash): mark test to open the app with a URL hash"
+    )
+    config.addinivalue_line(
+        "markers",
+        "external_test: mark test as compatible with external app execution mode",
     )
 
 
@@ -110,6 +147,103 @@ def reorder_early_fixtures(metafunc: pytest.Metafunc) -> None:
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     reorder_early_fixtures(metafunc)
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Validate external app mode configuration during collection.
+
+    When external app / host mode is enabled, we expect at least one collected
+    test to be marked with ``@pytest.mark.external_test``. Without that marker,
+    all tests will be skipped (see ``skip_non_external_tests_in_external_mode``)
+    which is usually not what the user intended.
+    """
+    external_app = _get_config_option_or_env(
+        config, "--external-app-url", "STREAMLIT_E2E_EXTERNAL_APP_URL"
+    )
+    external_host = _get_config_option_or_env(
+        config, "--external-host-url", "STREAMLIT_E2E_EXTERNAL_HOST_URL"
+    )
+    if not (external_app or external_host):
+        return
+
+    if any(item.get_closest_marker("external_test") is not None for item in items):
+        return
+
+    raise pytest.UsageError(
+        "External app mode was enabled, but no collected tests were marked "
+        "with @pytest.mark.external_test. Mark at least one compatible test "
+        "with 'external_test', or run without --external-app-url/--external-host-url "
+        "(and the corresponding STREAMLIT_E2E_EXTERNAL_* env vars)."
+    )
+
+
+def _get_config_option_or_env(
+    pytestconfig: pytest.Config, option_name: str, env_name: str
+) -> str | None:
+    # `pytestconfig.getoption` is typed as `Any` in pytest, but for our `store`
+    # options (e.g. `--external-app-url`) we expect `str | None`.
+    raw_value = pytestconfig.getoption(option_name)
+    if raw_value is not None:
+        if not isinstance(raw_value, str):
+            raise pytest.UsageError(
+                f"Expected {option_name} to be a string, got {type(raw_value).__name__}."
+            )
+        value = raw_value.strip()
+        if value:
+            return value
+
+    env_raw_value = os.getenv(env_name)
+    if env_raw_value is not None:
+        env_value = env_raw_value.strip()
+        if env_value:
+            return env_value
+
+    return None
+
+
+def _build_app_url(base_url: str, *, fragment: str | None) -> str:
+    """Build an app navigation URL from ``base_url`` and an optional fragment.
+
+    This preserves the user-provided path (including any trailing slash) to
+    avoid altering routing semantics for externally hosted apps.
+
+    The only normalization we do is mapping an empty path to ``"/"`` so that
+    ``https://example.com#foo`` and ``https://example.com/#foo`` both navigate
+    to the root path with the given fragment.
+    """
+    split = parse.urlsplit(base_url)
+    path = _normalize_empty_path(split.path)
+
+    if fragment is not None:
+        frag = fragment.lstrip("#")
+        return parse.urlunsplit((split.scheme, split.netloc, path, split.query, frag))
+
+    return parse.urlunsplit((split.scheme, split.netloc, path, split.query, ""))
+
+
+def _normalize_empty_path(path: str) -> str:
+    """Normalize an empty URL path to ``"/"``.
+
+    This intentionally does not change ``"/"`` or any non-empty path, including
+    trailing slashes, to preserve user-provided routing semantics.
+    """
+    return "/" if path == "" else path
+
+
+def _with_query_params(url: str, params: dict[str, str]) -> str:
+    """Return ``url`` with the provided query params set.
+
+    This preserves the original path (including any trailing slash) and only
+    normalizes the empty-path case to ``"/"``.
+    """
+    split = parse.urlsplit(url)
+    path = _normalize_empty_path(split.path)
+    existing = dict(parse.parse_qsl(split.query, keep_blank_values=True))
+    existing.update(params)
+    query = parse.urlencode(existing, doseq=True)
+    return parse.urlunsplit((split.scheme, split.netloc, path, query, split.fragment))
 
 
 class AsyncSubprocess:
@@ -286,6 +420,95 @@ def app_port(worker_id: str) -> int:
     return find_available_port()
 
 
+@pytest.fixture(scope="session")
+def external_app_url(pytestconfig: pytest.Config) -> str | None:
+    """Return the external app URL if configured, otherwise None.
+
+    The URL can be configured via CLI option or environment variable.
+    """
+    value = _get_config_option_or_env(
+        pytestconfig, "--external-app-url", "STREAMLIT_E2E_EXTERNAL_APP_URL"
+    )
+    if value is None:
+        return None
+
+    parsed = parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise pytest.UsageError(
+            "Invalid value for --external-app-url / STREAMLIT_E2E_EXTERNAL_APP_URL: "
+            f"{value!r}. Expected an absolute HTTP(S) URL, e.g. "
+            "'http://localhost:8501' or 'https://example.com/app'."
+        )
+
+    return value
+
+
+@pytest.fixture(scope="session")
+def external_host_url(
+    pytestconfig: pytest.Config, external_app_url: str | None
+) -> str | None:
+    """Return the external host page URL if configured via CLI or environment.
+
+    When configured, this must be an absolute HTTP(S) URL. It also requires that
+    ``external_app_url`` is configured, since the app server will not be started
+    locally in that mode.
+    """
+    value = _get_config_option_or_env(
+        pytestconfig, "--external-host-url", "STREAMLIT_E2E_EXTERNAL_HOST_URL"
+    )
+    if value is None:
+        return None
+
+    if external_app_url is None:
+        raise pytest.UsageError(
+            "Invalid configuration: --external-host-url / "
+            "STREAMLIT_E2E_EXTERNAL_HOST_URL was set without also setting "
+            "--external-app-url / STREAMLIT_E2E_EXTERNAL_APP_URL. Please "
+            "configure both options, or remove the external host URL."
+        )
+
+    parsed = parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise pytest.UsageError(
+            "Invalid value for --external-host-url / STREAMLIT_E2E_EXTERNAL_HOST_URL: "
+            f"{value!r}. Expected an absolute HTTP(S) URL, e.g. "
+            "'http://localhost:3000/host-page' or 'https://example.com/host'."
+        )
+
+    return value
+
+
+@pytest.fixture(scope="session")
+def external_iframe_selector(pytestconfig: pytest.Config) -> str:
+    """Return the iframe selector to use when targeting an externally hosted app inside a host page."""
+    return (
+        _get_config_option_or_env(
+            pytestconfig,
+            "--external-iframe-selector",
+            "STREAMLIT_E2E_EXTERNAL_IFRAME_SELECTOR",
+        )
+        or "iframe"
+    )
+
+
+@pytest.fixture(scope="session")
+def browser_state_path(pytestconfig: pytest.Config) -> Path | None:
+    """Return a Path to a valid Playwright storage state file, otherwise None.
+
+    The path can be configured via CLI option or environment variable.
+    Raises ``pytest.UsageError`` if the configured path does not exist.
+    """
+    value = _get_config_option_or_env(
+        pytestconfig, "--browser-state-path", "STREAMLIT_E2E_BROWSER_STATE_PATH"
+    )
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if not path.exists():
+        raise pytest.UsageError(f"Playwright storage state file not found at: {path}")
+    return path
+
+
 @pytest.fixture(scope="module")
 def app_server_extra_args(request: pytest.FixtureRequest) -> list[str]:
     """Fixture that returns extra arguments to pass to the Streamlit app server."""
@@ -300,8 +523,18 @@ def app_server(
     app_port: int,
     app_server_extra_args: list[str],
     request: pytest.FixtureRequest,
-) -> Generator[AsyncSubprocess, None, None]:
-    """Fixture that starts and stops the Streamlit app server."""
+    external_app_url: str | None,
+    external_host_url: str | None,
+) -> Generator[AsyncSubprocess | None, None, None]:
+    """Fixture that starts and stops the Streamlit app server.
+
+    When ``external_app_url`` or ``external_host_url`` is configured, yields
+    ``None`` and skips server startup, assuming the app is already running
+    externally (either directly or embedded in a host page).
+    """
+    if external_app_url or external_host_url:
+        yield None
+        return
     streamlit_proc = start_app_server(
         app_port,
         request.module,
@@ -312,17 +545,51 @@ def app_server(
     print(streamlit_stdout, flush=True)
 
 
+@pytest.fixture(autouse=True)
+def skip_non_external_tests_in_external_mode(
+    request: pytest.FixtureRequest,
+    external_app_url: str | None,
+    external_host_url: str | None,
+) -> None:
+    """Automatically skip tests that are not marked as external-compatible.
+
+    When running in external app mode (for example, when ``--external-app-url``
+    is provided and ``external_app_url`` is not ``None``), only tests marked
+    with ``@pytest.mark.external_test`` are executed. All other tests are
+    skipped, since they rely on a locally started Streamlit app server that is
+    not used in external app mode.
+
+    This also applies when running in external host mode (for example, when
+    ``--external-host-url`` is provided and ``external_host_url`` is not
+    ``None``), where the app is embedded within another host page.
+    """
+    if not (external_app_url or external_host_url):
+        return
+    if request.node.get_closest_marker("external_test") is None:
+        pytest.skip("External app mode only supports tests marked 'external_test'.")
+
+
 @pytest.fixture
-def app(page: Page, app_port: int, request: pytest.FixtureRequest) -> Page:
+def app(page: Page, app_base_url: str, request: pytest.FixtureRequest) -> Page:
     """Fixture that opens the app."""
     marker = request.node.get_closest_marker("app_hash")
-    hash_fragment = ""
+    fragment: str | None = None
     if marker:
-        hash_fragment = f"#{marker.args[0]}"
+        if not marker.args:
+            raise pytest.UsageError(
+                "app_hash marker requires a single string argument, e.g. "
+                "@pytest.mark.app_hash('my-fragment')"
+            )
+        marker_arg = marker.args[0]
+        if not isinstance(marker_arg, str):
+            raise pytest.UsageError(
+                f"app_hash marker argument must be a string, got {type(marker_arg).__name__}."
+            )
+        fragment = marker_arg
 
     response: Response | None = None
     try:
-        response = page.goto(f"http://localhost:{app_port}/{hash_fragment}")
+        response = page.goto(_build_app_url(app_base_url, fragment=fragment))
     except Exception as e:
         print(e, flush=True)
 
@@ -341,6 +608,16 @@ def app(page: Page, app_port: int, request: pytest.FixtureRequest) -> Page:
     start_capture_traces(page)
     wait_for_app_loaded(page)
     return page
+
+
+@pytest.fixture(scope="module")
+def app_base_url(app_port: int, external_app_url: str | None) -> str:
+    """Return the base URL to use for app navigation.
+
+    Returns ``external_app_url`` if configured; otherwise constructs a localhost
+    URL using ``app_port``.
+    """
+    return external_app_url or f"http://localhost:{app_port}"
 
 
 @pytest.fixture
@@ -615,9 +892,20 @@ def browser_type_launch_args(
 
 @pytest.fixture(scope="session")
 def browser_context_args(
-    browser_context_args: dict[str, Any], browser_name: str
+    browser_context_args: dict[str, Any],
+    browser_name: str,
+    browser_state_path: Path | None,
 ) -> dict[str, Any]:
-    """Fixture that adds clipboard permissions to the browser context for Chromium."""
+    """Fixture that configures browser context.
+
+    Sets ``storage_state`` if ``browser_state_path`` is provided, and adds
+    clipboard permissions for Chromium browsers.
+    """
+    if browser_state_path is not None:
+        browser_context_args = {
+            **browser_context_args,
+            "storage_state": str(browser_state_path),
+        }
     # Clipboard permissions are only supported in Chromium-based browsers
     if browser_name == "chromium":
         return {
@@ -732,9 +1020,9 @@ def app_theme(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture
-def themed_app(page: Page, app_port: int, app_theme: str) -> Page:
+def themed_app(page: Page, app_base_url: str, app_theme: str) -> Page:
     """Fixture that opens the app with the given theme."""
-    page.goto(f"http://localhost:{app_port}/?embed_options={app_theme}")
+    page.goto(_with_query_params(app_base_url, {"embed_options": app_theme}))
     start_capture_traces(page)
     wait_for_app_loaded(page)
     return page
