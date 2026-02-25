@@ -33,6 +33,7 @@ _LOGGER: Final = logger.get_logger(__name__)
 
 if TYPE_CHECKING:
     from datetime import timedelta
+    from uuid import UUID
 
     from pandas import DataFrame
     from snowflake.connector.cursor import SnowflakeCursor  # type:ignore[import]
@@ -139,7 +140,12 @@ class BaseSnowflakeConnection(BaseConnection["InternalSnowflakeConnection"]):
         )
         # `params` must be an explicit parameter (not captured from closure) so that
         # `@st.cache_data` includes it in the cache key.
-        def _query(sql: str, params: Any = None) -> DataFrame:
+        def _query(
+            # Dummy parameter to retain per-instance caching.
+            instance_id: UUID,  # noqa: ARG001
+            sql: str,
+            params: Any = None,
+        ) -> DataFrame:
             cur = self._instance.cursor()
             cur.execute(sql, params=params, **kwargs)
             return cur.fetch_pandas_all()  # type: ignore
@@ -157,7 +163,7 @@ class BaseSnowflakeConnection(BaseConnection["InternalSnowflakeConnection"]):
             ttl=ttl,
         )(_query)
 
-        return _query(sql, params)
+        return _query(self._connection_instance_id, sql, params)
 
     def write_pandas(
         self,
