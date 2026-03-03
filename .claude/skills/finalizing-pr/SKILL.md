@@ -9,7 +9,7 @@ Prepares the current branch for merge by running quality checks, simplifying cod
 
 ## Workflow
 
-Follow these steps in order:
+Follow these steps in order. **Run all subagents in foreground** (not background) unless otherwise specified—wait for each to complete before proceeding.
 
 > **Note:** For small changes (documentation tweaks, test-only tweaks, one-liners, or other mini-changes), you can skip steps 1, 2, 3, 6, 7, and 8.
 
@@ -69,7 +69,11 @@ gh pr view --json number,title,url
 **If no PR exists**, create one following the guidelines in `wiki/pull-requests.md`. Add appropriate labels (`impact:*` and `change:*`) and fill in the body based on `.github/pull_request_template.md` (skip the video/screenshot section):
 
 ```bash
-gh pr create --push --base develop --title "[type] Description" --body "$(cat <<'EOF'
+# Push branch to origin first (required for gh pr create in non-interactive mode)
+git push -u origin HEAD
+
+# Create the PR
+gh pr create --base develop --title "[type] Description" --body "$(cat <<'EOF'
 ## Describe your changes
 
 - Change 1
