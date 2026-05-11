@@ -403,12 +403,16 @@ function DataFrame({
 
     const currentGetOriginalIndex = getOriginalIndexRef.current
 
-    // Find the new display indices for the original data rows
+    // Build a Set for O(1) lookup instead of O(n²) nested loops
+    const targetOriginalIndices = new Set(originalRowIndices)
     const newDisplayIndices: number[] = []
-    for (const origIdx of originalRowIndices) {
-      for (let displayIdx = 0; displayIdx < originalNumRows; displayIdx++) {
-        if (currentGetOriginalIndex(displayIdx) === origIdx) {
-          newDisplayIndices.push(displayIdx)
+
+    for (let displayIdx = 0; displayIdx < originalNumRows; displayIdx++) {
+      const origIdx = currentGetOriginalIndex(displayIdx)
+      if (targetOriginalIndices.has(origIdx)) {
+        newDisplayIndices.push(displayIdx)
+        // Early exit when all targets found
+        if (newDisplayIndices.length === targetOriginalIndices.size) {
           break
         }
       }
